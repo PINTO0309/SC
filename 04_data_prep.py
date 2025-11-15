@@ -811,7 +811,14 @@ def main() -> None:
                 and detector_stats.hip_knee_in_range
             )
         else:
-            keep_crop = detector_stats.body_count <= 1
+            keep_crop = (
+                detector_stats.body_count == 1
+                and detector_stats.abdomen_present
+                and detector_stats.hip_present
+                and detector_stats.knee_present
+                and detector_stats.hip_knee_delta is not None
+                and not detector_stats.hip_knee_in_range
+            )
 
         if not keep_crop:
             output_path.unlink(missing_ok=True)
