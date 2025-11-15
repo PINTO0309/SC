@@ -29,3 +29,9 @@ uv run python 04_data_prep.py \
 --balance-classes
 ```
 <img width="400" alt="class_ratio" src="https://github.com/user-attachments/assets/803c0341-bdd7-43fa-9569-c195a82f6434" /><img width="400" alt="image_size_hist" src="https://github.com/user-attachments/assets/04459a93-a08f-42f5-ab4e-196853145af0" />
+
+```bash
+uv run python 05_make_parquet.py \
+--embed-images \
+--overwrite
+```
