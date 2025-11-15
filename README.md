@@ -14,7 +14,7 @@ uv run python 04_data_prep.py
 uv run python 04_data_prep.py \
 --timestamp-stride 1 \
 --image-dir /home/b920405/git/SC/data/images \
---annotation-file./data/annotation.txt \
+--annotation-file ./data/annotation.txt \
 --histogram-file ./data/image_size_hist.png \
 --class-ratio-file ./data/class_ratio.png \
 --balance-classes \
@@ -23,7 +23,7 @@ uv run python 04_data_prep.py \
 uv run python 04_data_prep.py \
 --timestamp-stride 1 \
 --image-dir /home/b920405/git/SC/data/images \
---annotation-file./data/annotation.txt \
+--annotation-file ./data/annotation.txt \
 --histogram-file ./data/image_size_hist.png \
 --class-ratio-file ./data/class_ratio.png \
 --balance-classes
