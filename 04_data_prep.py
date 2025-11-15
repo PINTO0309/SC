@@ -41,8 +41,11 @@ DETECTOR_INPUT_SIZE = 640
 DETECTOR_BODY_LABEL = 0
 DETECTOR_ABDOMEN_LABEL = 29
 DETECTOR_HIP_LABEL = 30
+DETECTOR_KNEE_LABELS = (31, 32)
 DETECTOR_BODY_THRESHOLD = 0.35
 DETECTOR_PART_THRESHOLD = 0.30
+SITTING_KNEE_MIN_VERTICAL_DELTA = -0.05
+SITTING_KNEE_MAX_VERTICAL_DELTA = 0.22
 
 
 @dataclass
@@ -75,6 +78,21 @@ class CropRecord:
     width: int
     height: int
     path: Path | None
+
+
+@dataclass
+class DetectorCropStats:
+    body_count: int
+    abdomen_present: bool
+    hip_present: bool
+    knee_present: bool
+    hip_knee_delta: float | None
+
+    @property
+    def hip_knee_in_range(self) -> bool:
+        if self.hip_knee_delta is None:
+            return False
+        return SITTING_KNEE_MIN_VERTICAL_DELTA <= self.hip_knee_delta <= SITTING_KNEE_MAX_VERTICAL_DELTA
 
 
 def read_annotation_rows(csv_paths: Iterable[Path]) -> dict[tuple[str, str], dict[int, PersonRecord]]:
@@ -230,12 +248,19 @@ def load_detector_session(model_path: Path) -> tuple[ort.InferenceSession, str]:
     return session, input_name
 
 
+def _compute_center_y(det: np.ndarray) -> float:
+    """Return midpoint of the detection box along the Y axis (normalized coordinates)."""
+    y1 = float(det[2])
+    y2 = float(det[4])
+    return (y1 + y2) / 2.0
+
+
 def detector_evaluate_crop(
     session: ort.InferenceSession,
     input_name: str,
     image_path: Path,
-) -> tuple[int, bool, bool]:
-    """Return detector stats (body count, abdomen present, hip present)."""
+) -> DetectorCropStats:
+    """Return detector stats including optional hip/knee alignment data."""
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Detector input missing: {image_path}")
@@ -252,6 +277,9 @@ def detector_evaluate_crop(
     body_count = 0
     abdomen_present = False
     hip_present = False
+    knee_present = False
+    hip_centers: list[float] = []
+    knee_centers: list[float] = []
     for det in detections:
         label = int(round(det[0]))
         score = float(det[5])
@@ -261,8 +289,26 @@ def detector_evaluate_crop(
             abdomen_present = True
         elif label == DETECTOR_HIP_LABEL and score >= DETECTOR_PART_THRESHOLD:
             hip_present = True
+            hip_centers.append(_compute_center_y(det))
+        elif label in DETECTOR_KNEE_LABELS and score >= DETECTOR_PART_THRESHOLD:
+            knee_present = True
+            knee_centers.append(_compute_center_y(det))
 
-    return body_count, abdomen_present, hip_present
+    hip_knee_delta: float | None = None
+    if hip_centers and knee_centers:
+        # Choose the hip/knee pair with the closest vertical alignment.
+        _, hip_knee_delta = min(
+            ((abs(k - h), k - h) for h in hip_centers for k in knee_centers),
+            key=lambda item: item[0],
+        )
+
+    return DetectorCropStats(
+        body_count=body_count,
+        abdomen_present=abdomen_present,
+        hip_present=hip_present,
+        knee_present=knee_present,
+        hip_knee_delta=hip_knee_delta,
+    )
 
 
 def rebalance_records(
@@ -743,7 +789,7 @@ def main() -> None:
 
         assert detector_session is not None and detector_input_name is not None
         try:
-            body_count, abdomen_present, hip_present = detector_evaluate_crop(
+            detector_stats = detector_evaluate_crop(
                 detector_session,
                 detector_input_name,
                 output_path,
@@ -757,9 +803,15 @@ def main() -> None:
             continue
 
         if person_record.class_id == 1:
-            keep_crop = body_count == 1 and (abdomen_present or hip_present)
+            keep_crop = (
+                detector_stats.body_count == 1
+                and detector_stats.abdomen_present
+                and detector_stats.hip_present
+                and detector_stats.knee_present
+                and detector_stats.hip_knee_in_range
+            )
         else:
-            keep_crop = body_count <= 1
+            keep_crop = detector_stats.body_count <= 1
 
         if not keep_crop:
             output_path.unlink(missing_ok=True)
