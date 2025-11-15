@@ -5,14 +5,21 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
+import random
+import statistics
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator
 
+import cv2
 import matplotlib.pyplot as plt
+import numpy as np
+import onnxruntime as ort
 from PIL import Image
 from tqdm import tqdm
 
@@ -21,12 +28,21 @@ DEFAULT_TRAIN_CSV = ROOT / "ava_v2.2" / "ava_train_v2.2_seq.csv"
 DEFAULT_VAL_CSV = ROOT / "ava_v2.2" / "ava_val_v2.2_seq.csv"
 DEFAULT_VIDEO_DIRS = (ROOT / "data" / "trainval", ROOT / "data" / "test")
 DEFAULT_IMAGE_DIR = ROOT / "data" / "images"
-IMAGES_PER_FOLDER = 1000
 DEFAULT_ANNOTATION_FILE = ROOT / "data" / "annotation.txt"
 DEFAULT_HISTOGRAM_FILE = ROOT / "data" / "image_size_hist.png"
 DEFAULT_PIE_FILE = ROOT / "data" / "class_ratio.png"
+DEFAULT_FFPROBE_BIN = "ffprobe"
+DEFAULT_DETECTOR_MODEL = ROOT / "deimv2_dinov3_x_wholebody34_680query_n_batch_640x640.onnx"
 SITTING_ACTION_ID = 11
 MIN_DIMENSION = 6
+MAX_DIMENSION = 750
+IMAGES_PER_FOLDER = 1000
+DETECTOR_INPUT_SIZE = 640
+DETECTOR_BODY_LABEL = 0
+DETECTOR_ABDOMEN_LABEL = 29
+DETECTOR_HIP_LABEL = 30
+DETECTOR_BODY_THRESHOLD = 0.35
+DETECTOR_PART_THRESHOLD = 0.30
 
 
 @dataclass
@@ -47,6 +63,18 @@ class PersonRecord:
         if self.class_id == 1:
             return self.box_sitting or self.box_other
         return self.box_other or self.box_sitting
+
+
+@dataclass
+class CropRecord:
+    filename: str
+    video_id: str
+    timestamp: str
+    person_id: int
+    class_id: int
+    width: int
+    height: int
+    path: Path | None
 
 
 def read_annotation_rows(csv_paths: Iterable[Path]) -> dict[tuple[str, str], dict[int, PersonRecord]]:
@@ -122,6 +150,161 @@ def build_crop_filter(
     )
 
 
+def get_video_resolution(
+    video_path: Path,
+    ffprobe_bin: str,
+    cache: dict[Path, tuple[int, int]],
+) -> tuple[int, int] | None:
+    """Return cached (width, height) for a video using ffprobe if needed."""
+    if video_path in cache:
+        return cache[video_path]
+
+    cmd = [
+        ffprobe_bin,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=s=x:p=0",
+        str(video_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        print(f"[warn] ffprobe failed for {video_path}: {result.stderr.strip()}", file=sys.stderr)
+        return None
+
+    line = result.stdout.strip()
+    if "x" not in line:
+        print(f"[warn] ffprobe output unexpected for {video_path}: {line}", file=sys.stderr)
+        return None
+
+    try:
+        width_str, height_str = line.split("x")
+        width = int(width_str)
+        height = int(height_str)
+    except ValueError:
+        print(f"[warn] Unable to parse ffprobe output for {video_path}: {line}", file=sys.stderr)
+        return None
+
+    cache[video_path] = (width, height)
+    return cache[video_path]
+
+
+def estimate_pixel_dimensions(
+    box: tuple[float, float, float, float],
+    resolution: tuple[int, int],
+) -> tuple[int, int]:
+    """Estimate integer pixel width/height for a normalized box."""
+    x1, y1, x2, y2 = box
+    video_width, video_height = resolution
+    width = max(int(round((x2 - x1) * video_width)), 1)
+    height = max(int(round((y2 - y1) * video_height)), 1)
+    return width, height
+
+
+def load_detector_session(model_path: Path) -> tuple[ort.InferenceSession, str]:
+    """Load the ONNX detector session with CUDA preference."""
+    providers = [
+        (
+            "TensorrtExecutionProvider",
+            {
+                "trt_fp16_enable": True,
+                'trt_engine_cache_enable': True, # .engine, .profile export
+                'trt_engine_cache_path': f'.',
+                # 'trt_max_workspace_size': 4e9, # Maximum workspace size for TensorRT engine (1e9 ≈ 1GB)
+                # onnxruntime>=1.21.0 breaking changes
+                # https://onnxruntime.ai/docs/execution-providers/TensorRT-ExecutionProvider.html#data-dependant-shape-dds-ops
+                # https://github.com/microsoft/onnxruntime/pull/22681/files
+                # https://github.com/microsoft/onnxruntime/pull/23893/files
+                'trt_op_types_to_exclude': 'NonMaxSuppression,NonZero,RoiAlign',
+            },
+        ),
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    session = ort.InferenceSession(str(model_path), providers=providers)
+    input_name = session.get_inputs()[0].name
+    return session, input_name
+
+
+def detector_evaluate_crop(
+    session: ort.InferenceSession,
+    input_name: str,
+    image_path: Path,
+) -> tuple[int, bool, bool]:
+    """Return detector stats (body count, abdomen present, hip present)."""
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(f"Detector input missing: {image_path}")
+
+    resized = cv2.resize(
+        image,
+        (DETECTOR_INPUT_SIZE, DETECTOR_INPUT_SIZE),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    blob = resized.transpose(2, 0, 1).astype(np.float32, copy=False)
+    blob = np.expand_dims(blob, axis=0)
+    detections = session.run(None, {input_name: blob})[0][0]
+
+    body_count = 0
+    abdomen_present = False
+    hip_present = False
+    for det in detections:
+        label = int(round(det[0]))
+        score = float(det[5])
+        if label == DETECTOR_BODY_LABEL and score >= DETECTOR_BODY_THRESHOLD:
+            body_count += 1
+        elif label == DETECTOR_ABDOMEN_LABEL and score >= DETECTOR_PART_THRESHOLD:
+            abdomen_present = True
+        elif label == DETECTOR_HIP_LABEL and score >= DETECTOR_PART_THRESHOLD:
+            hip_present = True
+
+    return body_count, abdomen_present, hip_present
+
+
+def rebalance_records(
+    records: list[CropRecord],
+    *,
+    enabled: bool,
+    seed: int | None,
+) -> tuple[list[CropRecord], list[CropRecord]]:
+    """Balance class distribution by downsampling the majority class."""
+    if not enabled or not records:
+        return records, []
+
+    zeros = [record for record in records if record.class_id == 0]
+    ones = [record for record in records if record.class_id == 1]
+    if not zeros or not ones:
+        return records, []
+
+    rng = random.Random(seed)
+
+    if len(zeros) > len(ones):
+        rng.shuffle(zeros)
+        kept_zero = zeros[: len(ones)]
+        kept_one = ones
+        dropped = zeros[len(ones) :]
+    else:
+        rng.shuffle(ones)
+        kept_one = ones[: len(zeros)]
+        kept_zero = zeros
+        dropped = ones[len(zeros) :]
+
+    balanced = kept_zero + kept_one
+    balanced.sort(
+        key=lambda rec: (
+            rec.video_id,
+            rec.timestamp,
+            rec.person_id,
+            rec.class_id,
+        )
+    )
+    return balanced, dropped
+
+
 def extract_cropped_frame(
     ffmpeg_bin: str,
     video_path: Path,
@@ -129,16 +312,13 @@ def extract_cropped_frame(
     output_path: Path,
     *,
     overwrite: bool,
-    dry_run: bool,
     box: tuple[float, float, float, float],
     min_dimension: int,
+    max_dimension: int,
     skip_mmco_warning: bool,
 ) -> tuple[int, int] | None:
     """Extract a cropped person frame and return its (width, height) if kept."""
     seconds = float(timestamp)
-    if dry_run:
-        print(f"[ffmpeg] {video_path} @ {seconds:.3f}s crop {box} -> {output_path}")
-        return (0, 0)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
@@ -183,10 +363,15 @@ def extract_cropped_frame(
 
     with Image.open(output_path) as img:
         width, height = img.size
-    if width < min_dimension or height < min_dimension:
+    if (
+        width < min_dimension
+        or height < min_dimension
+        or width > max_dimension
+        or height > max_dimension
+    ):
         output_path.unlink(missing_ok=True)
         print(
-            f"[skip] Removed {output_path} due to small size ({width}x{height})",
+            f"[skip] Removed {output_path} due to invalid size ({width}x{height})",
             file=sys.stderr,
         )
         return None
@@ -211,12 +396,10 @@ def iter_annotation_records(
 def write_annotation_file(
     output_path: Path,
     records: list[tuple[str, str, str, str, str]],
-    *,
-    dry_run: bool,
 ) -> None:
     """Write the machine-learning annotation CSV."""
-    if dry_run:
-        print(f"[annotation] Would write {output_path} with {len(records)} rows")
+    if not records:
+        print(f"[annotation] No rows to write for {output_path}")
         return
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -230,17 +413,11 @@ def save_histogram(
     widths: list[int],
     heights: list[int],
     output_path: Path,
-    *,
-    dry_run: bool,
 ) -> None:
     """Plot stacked histograms for crop widths and heights."""
     sample_count = len(widths)
     if sample_count == 0:
         print("[hist] No crop dimension data available; skipping histogram")
-        return
-
-    if dry_run:
-        print(f"[hist] Would write {output_path} (samples: {sample_count})")
         return
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,11 +427,21 @@ def save_histogram(
     axes[0].set_title("Crop Height Distribution")
     axes[0].set_xlabel("Height (pixels)")
     axes[0].set_ylabel("Count")
+    height_mean = statistics.mean(heights)
+    height_median = statistics.median(heights)
+    axes[0].axvline(height_mean, color="#d62728", linestyle="--", linewidth=2, label=f"Mean {height_mean:.1f}")
+    axes[0].axvline(height_median, color="#2ca02c", linestyle="-.", linewidth=2, label=f"Median {height_median:.1f}")
+    axes[0].legend()
 
     axes[1].hist(widths, bins=50, color="#ff7f0e", edgecolor="black")
     axes[1].set_title("Crop Width Distribution")
     axes[1].set_xlabel("Width (pixels)")
     axes[1].set_ylabel("Count")
+    width_mean = statistics.mean(widths)
+    width_median = statistics.median(widths)
+    axes[1].axvline(width_mean, color="#d62728", linestyle="--", linewidth=2, label=f"Mean {width_mean:.1f}")
+    axes[1].axvline(width_median, color="#2ca02c", linestyle="-.", linewidth=2, label=f"Median {width_median:.1f}")
+    axes[1].legend()
 
     fig.suptitle("Cropped Image Dimensions")
     fig.savefig(output_path, dpi=150)
@@ -265,8 +452,6 @@ def save_histogram(
 def save_class_ratio_chart(
     class_counts: Counter[int],
     output_path: Path,
-    *,
-    dry_run: bool,
 ) -> None:
     """Save a pie chart showing the classid distribution."""
     total = sum(class_counts.values())
@@ -280,17 +465,15 @@ def save_class_ratio_chart(
         labels.append(f"classid={classid}")
         sizes.append(class_counts[classid])
 
-    if dry_run:
-        label_info = ", ".join(f"{label}:{count}" for label, count in zip(labels, sizes))
-        print(f"[pie] Would write {output_path} ({label_info})")
-        return
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.pie(
         sizes,
         labels=labels,
+        labeldistance=0.6,
         autopct=lambda pct: f"{pct:.1f}%\n({int(round(pct * total / 100))})",
+        pctdistance=0.8,
+        textprops={"ha": "center", "va": "center"},
         startangle=90,
     )
     ax.set_title("Class Distribution")
@@ -362,6 +545,17 @@ def parse_args() -> argparse.Namespace:
         help="Path to the ffmpeg executable (default: ffmpeg).",
     )
     parser.add_argument(
+        "--ffprobe-bin",
+        default=DEFAULT_FFPROBE_BIN,
+        help="Path to the ffprobe executable (default: ffprobe).",
+    )
+    parser.add_argument(
+        "--detector-model",
+        type=Path,
+        default=DEFAULT_DETECTOR_MODEL,
+        help="ONNX detector used to validate classid=1 crops (default: deimv2...640.onnx).",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Overwrite existing PNG files if they already exist.",
@@ -376,6 +570,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=MIN_DIMENSION,
         help="Minimum width/height (pixels) required to keep a crop (default: 6).",
+    )
+    parser.add_argument(
+        "--max-dimension",
+        type=int,
+        default=MAX_DIMENSION,
+        help="Maximum width/height (pixels); crops larger than this are skipped (default: 750).",
     )
     parser.add_argument(
         "--skip-mmco-warning",
@@ -395,12 +595,35 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Keep every Nth (video_id, timestamp) group to downsample data (default: 1, keep all).",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--balance-classes",
+        action="store_true",
+        dest="balance_classes",
+        help="(Deprecated) Final class balancing is enabled by default.",
+    )
+    parser.add_argument(
+        "--no-balance-classes",
+        action="store_false",
+        dest="balance_classes",
+        help="Disable final class balancing.",
+    )
+    parser.add_argument(
+        "--balance-seed",
+        type=int,
+        default=None,
+        help="Random seed used when --balance-classes is enabled.",
+    )
+    parser.set_defaults(balance_classes=True)
+    args = parser.parse_args()
+    if args.max_dimension < args.min_dimension:
+        parser.error("--max-dimension must be greater than or equal to --min-dimension")
+    return args
 
 
 def main() -> None:
     args = parse_args()
     min_dimension = max(1, args.min_dimension)
+    max_dimension = max(min_dimension, args.max_dimension)
 
     grouped = read_annotation_rows([args.train_csv, args.val_csv])
     print(f"[info] Aggregated {len(grouped)} (video_id, timestamp) groups.")
@@ -419,23 +642,35 @@ def main() -> None:
     images_per_folder = max(1, args.images_per_folder)
     generated_count = 0
     current_folder: Path | None = None
+    resolution_cache: dict[Path, tuple[int, int]] = {}
+    detector_session: ort.InferenceSession | None = None
+    detector_input_name: str | None = None
+    model_path = args.detector_model
+    if not model_path.exists():
+        print(f"[error] Detector model not found: {model_path}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        detector_session, detector_input_name = load_detector_session(model_path)
+        print(f"[info] Loaded detector model from {model_path}")
+    except Exception as exc:
+        print(f"[error] Failed to load detector model: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     stride = max(1, args.timestamp_stride)
-    total_records = sum(
-        len(bucket)
-        for index, (_, bucket) in enumerate(grouped_items)
-        if stride == 1 or index % stride == 0
-    )
-    if total_records == 0:
+    input_records = list(iter_annotation_records(grouped_items, timestamp_stride=stride))
+    if not input_records:
         print("[warn] No annotation records remain after timestamp stride filtering.", file=sys.stderr)
         return
 
     progress = tqdm(
-        iter_annotation_records(grouped_items, timestamp_stride=stride),
-        total=total_records,
+        input_records,
+        total=len(input_records),
         desc="Processing",
         unit="person",
     )
+
+    detector_skipped = 0
+    processed_records: list[CropRecord] = []
 
     for video_id, timestamp, person_record in progress:
         video_path = video_index.get(video_id)
@@ -443,15 +678,7 @@ def main() -> None:
             missing_videos.add(video_id)
             continue
 
-        if current_folder is None or generated_count % images_per_folder == 0:
-            folder_index = generated_count // images_per_folder + 1
-            folder_name = f"{folder_index:04d}"
-            current_folder = args.image_dir / folder_name
-            if not args.dry_run:
-                current_folder.mkdir(parents=True, exist_ok=True)
-
         filename = f"{video_id}_{timestamp}_{person_record.person_id:05d}_{person_record.class_id}.png"
-        output_path = current_folder / filename
         raw_box = person_record.get_box()
         clamped_box = clamp_box(raw_box) if raw_box else None
         if clamped_box is None:
@@ -461,6 +688,37 @@ def main() -> None:
             )
             continue
 
+        resolution = get_video_resolution(video_path, args.ffprobe_bin, resolution_cache)
+        if resolution is None:
+            continue
+
+        width_px, height_px = estimate_pixel_dimensions(clamped_box, resolution)
+        if (
+            width_px < min_dimension
+            or height_px < min_dimension
+            or width_px > max_dimension
+            or height_px > max_dimension
+        ):
+            continue
+
+        temp_output = False
+        if args.dry_run:
+            fd, temp_name = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            output_path = Path(temp_name)
+            try:
+                output_path.unlink()
+            except FileNotFoundError:
+                pass
+            temp_output = True
+        else:
+            if current_folder is None or generated_count % images_per_folder == 0:
+                folder_index = generated_count // images_per_folder + 1
+                folder_name = f"{folder_index:04d}"
+                current_folder = args.image_dir / folder_name
+                current_folder.mkdir(parents=True, exist_ok=True)
+            output_path = current_folder / filename
+
         try:
             dims = extract_cropped_frame(
                 args.ffmpeg_bin,
@@ -468,26 +726,66 @@ def main() -> None:
                 timestamp,
                 output_path,
                 overwrite=args.overwrite,
-                dry_run=args.dry_run,
                 box=clamped_box,
                 min_dimension=min_dimension,
+                max_dimension=max_dimension,
                 skip_mmco_warning=args.skip_mmco_warning,
             )
         except Exception as exc:
             print(f"[warn] Failed to process {video_id} {timestamp} pid={person_record.person_id}: {exc}", file=sys.stderr)
+            if temp_output:
+                output_path.unlink(missing_ok=True)
             continue
         if dims is None:
+            if temp_output:
+                output_path.unlink(missing_ok=True)
             continue
 
-        if not args.dry_run:
-            width, height = dims
-            collected_widths.append(width)
-            collected_heights.append(height)
+        assert detector_session is not None and detector_input_name is not None
+        try:
+            body_count, abdomen_present, hip_present = detector_evaluate_crop(
+                detector_session,
+                detector_input_name,
+                output_path,
+            )
+        except Exception as exc:
+            print(
+                f"[warn] Detector check failed for {output_path}: {exc}",
+                file=sys.stderr,
+            )
+            output_path.unlink(missing_ok=True)
+            continue
 
-        annotation_records.append(
-            (filename, video_id, timestamp, str(person_record.person_id), str(person_record.class_id))
+        if person_record.class_id == 1:
+            keep_crop = body_count == 1 and (abdomen_present or hip_present)
+        else:
+            keep_crop = body_count <= 1
+
+        if not keep_crop:
+            output_path.unlink(missing_ok=True)
+            detector_skipped += 1
+            continue
+
+        width_px, height_px = dims
+        processed_records.append(
+            CropRecord(
+                filename=filename,
+                video_id=video_id,
+                timestamp=timestamp,
+                person_id=person_record.person_id,
+                class_id=person_record.class_id,
+                width=width_px,
+                height=height_px,
+                path=None if args.dry_run else output_path,
+            )
         )
-        class_counts[person_record.class_id] += 1
+
+        if temp_output:
+            output_path.unlink(missing_ok=True)
+
+        if args.dry_run:
+            continue
+
         generated_count += 1
 
     if missing_videos:
@@ -497,9 +795,34 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    write_annotation_file(args.annotation_file, annotation_records, dry_run=args.dry_run)
-    save_histogram(collected_widths, collected_heights, args.histogram_file, dry_run=args.dry_run)
-    save_class_ratio_chart(class_counts, args.class_ratio_file, dry_run=args.dry_run)
+    balanced_records, dropped_records = rebalance_records(
+        processed_records, enabled=args.balance_classes, seed=args.balance_seed
+    )
+
+    if dropped_records and not args.dry_run:
+        for record in dropped_records:
+            if record.path:
+                record.path.unlink(missing_ok=True)
+
+    collected_widths = [record.width for record in balanced_records]
+    collected_heights = [record.height for record in balanced_records]
+    class_counts = Counter(record.class_id for record in balanced_records)
+
+    if not args.dry_run:
+        annotation_records = [
+            (record.filename, record.video_id, record.timestamp, str(record.person_id), str(record.class_id))
+            for record in balanced_records
+        ]
+        write_annotation_file(args.annotation_file, annotation_records)
+    else:
+        print(f"[annotation] Dry run: skipping write to {args.annotation_file}")
+
+    save_histogram(collected_widths, collected_heights, args.histogram_file)
+    save_class_ratio_chart(class_counts, args.class_ratio_file)
+    if detector_skipped:
+        print(f"[detector] Skipped {detector_skipped} crops after detector filtering.")
+    if dropped_records:
+        print(f"[balance] Removed {len(dropped_records)} crops to rebalance classes.")
 
 
 if __name__ == "__main__":
