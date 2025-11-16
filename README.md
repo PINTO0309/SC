@@ -80,15 +80,16 @@ uv run python 06_merge_parquet.py dataset1.parquet dataset2.parquet \
 Baseline depthwise-separable CNN:
 
 ```bash
+SIZE=32x24
 uv run python -m sc train \
 --data_root data/dataset.parquet \
---output_dir runs/sc \
+--output_dir runs/sc_${SIZE} \
 --epochs 100 \
 --batch_size 256 \
 --train_ratio 0.9 \
 --val_ratio 0.1 \
 --train_resampling balanced \
---image_size 32x18 \
+--image_size ${SIZE} \
 --base_channels 32 \
 --num_blocks 4 \
 --arch_variant baseline \
@@ -100,15 +101,16 @@ uv run python -m sc train \
 Inverted residual + SE variant (recommended for higher capacity):
 
 ```bash
+SIZE=32x24
 uv run python -m sc train \
 --data_root data/dataset.parquet \
---output_dir runs/sc_is_s \
+--output_dir runs/sc_is_s_${SIZE} \
 --epochs 100 \
 --batch_size 256 \
 --train_ratio 0.9 \
 --val_ratio 0.1 \
 --train_resampling balanced \
---image_size 32x18 \
+--image_size ${SIZE} \
 --base_channels 32 \
 --num_blocks 4 \
 --arch_variant inverted_se \
@@ -121,15 +123,16 @@ uv run python -m sc train \
 ConvNeXt-style backbone with transformer head over pooled tokens:
 
 ```bash
+SIZE=32x24
 uv run python -m sc train \
 --data_root data/dataset.parquet \
---output_dir runs/sc_convnext \
+--output_dir runs/sc_convnext_${SIZE} \
 --epochs 100 \
 --batch_size 256 \
 --train_ratio 0.9 \
 --val_ratio 0.1 \
 --train_resampling balanced \
---image_size 32x18 \
+--image_size ${SIZE} \
 --base_channels 32 \
 --num_blocks 4 \
 --arch_variant convnext \
