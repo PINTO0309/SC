@@ -80,7 +80,7 @@ uv run python 06_merge_parquet.py dataset1.parquet dataset2.parquet \
 Baseline depthwise-separable CNN:
 
 ```bash
-uv run python -m pgc train \
+uv run python -m sc train \
 --data_root data/dataset.parquet \
 --output_dir runs/sc \
 --epochs 100 \
@@ -100,7 +100,7 @@ uv run python -m pgc train \
 Inverted residual + SE variant (recommended for higher capacity):
 
 ```bash
-uv run python -m pgc train \
+uv run python -m sc train \
 --data_root data/dataset.parquet \
 --output_dir runs/sc_is_s \
 --epochs 100 \
@@ -121,7 +121,7 @@ uv run python -m pgc train \
 ConvNeXt-style backbone with transformer head over pooled tokens:
 
 ```bash
-uv run python -m pgc train \
+uv run python -m sc train \
 --data_root data/dataset.parquet \
 --output_dir runs/sc_convnext \
 --epochs 100 \
