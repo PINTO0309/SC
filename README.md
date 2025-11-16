@@ -1,6 +1,8 @@
 # SC
 Ultrafast sitting classification.
 
+https://github.com/user-attachments/assets/635773d8-3826-45fd-ac33-e51fe3695176
+
 |Variant|Size|F1|CPU<br>inference<br>latency|ONNX|
 |:-:|:-:|:-:|:-:|:-:|
 |P| KB|0.9524|0.43 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_s_32x24.onnx)|
