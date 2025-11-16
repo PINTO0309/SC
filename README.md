@@ -27,6 +27,16 @@ uv run python 04_data_prep.py \
 --histogram-file ./data/image_size_hist.png \
 --class-ratio-file ./data/class_ratio.png \
 --balance-classes
+
+python 04_data_prep.py \
+--timestamp-stride 1 \
+--image-dir /home/b920405/git/SC/data/images \
+--annotation-file /home/b920405/git/SC/data/annotation.txt \
+--histogram-file /home/b920405/git/SC/data/image_size_hist.png \
+--class-ratio-file /home/b920405/git/SC/data/class_ratio.png \
+--balance-classes \
+--resume-existing \
+--start-index 198727
 ```
 <img width="400" alt="class_ratio" src="https://github.com/user-attachments/assets/803c0341-bdd7-43fa-9569-c195a82f6434" /><img width="400" alt="image_size_hist" src="https://github.com/user-attachments/assets/04459a93-a08f-42f5-ab4e-196853145af0" />
 
