@@ -45,3 +45,8 @@ uv run python 05_make_parquet.py \
 --embed-images \
 --overwrite
 ```
+```bash
+uv run python 06_merge_parquet.py dataset1.parquet dataset2.parquet \
+--output dataset.parquet \
+--overwrite
+```
