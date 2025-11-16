@@ -538,6 +538,24 @@ def save_histogram(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(2, 1, figsize=(10, 8), constrained_layout=True)
 
+    def _create_stat_annotator(axis):
+        def annotate(x_value: float, label: str) -> None:
+            ymin, ymax = axis.get_ylim()
+            y = ymin + (ymax - ymin) * 0.95
+            axis.text(
+                x_value,
+                y,
+                label,
+                rotation=90,
+                va="top",
+                ha="center",
+                fontsize=9,
+                color="black",
+                bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none"},
+            )
+
+        return annotate
+
     axes[0].hist(heights, bins=50, color="#1f77b4", edgecolor="black")
     axes[0].set_title("Crop Height Distribution")
     axes[0].set_xlabel("Height (pixels)")
@@ -546,6 +564,9 @@ def save_histogram(
     height_median = statistics.median(heights)
     axes[0].axvline(height_mean, color="#d62728", linestyle="--", linewidth=2, label=f"Mean {height_mean:.1f}")
     axes[0].axvline(height_median, color="#2ca02c", linestyle="-.", linewidth=2, label=f"Median {height_median:.1f}")
+    annotate_height = _create_stat_annotator(axes[0])
+    annotate_height(height_mean, f"Mean {height_mean:.1f}")
+    annotate_height(height_median, f"Median {height_median:.1f}")
     axes[0].legend()
 
     axes[1].hist(widths, bins=50, color="#ff7f0e", edgecolor="black")
@@ -556,6 +577,9 @@ def save_histogram(
     width_median = statistics.median(widths)
     axes[1].axvline(width_mean, color="#d62728", linestyle="--", linewidth=2, label=f"Mean {width_mean:.1f}")
     axes[1].axvline(width_median, color="#2ca02c", linestyle="-.", linewidth=2, label=f"Median {width_median:.1f}")
+    annotate_width = _create_stat_annotator(axes[1])
+    annotate_width(width_mean, f"Mean {width_mean:.1f}")
+    annotate_width(width_median, f"Median {width_median:.1f}")
     axes[1].legend()
 
     fig.suptitle("Cropped Image Dimensions")
@@ -582,7 +606,7 @@ def save_class_ratio_chart(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(6, 6))
-    ax.pie(
+    wedges, texts, autotexts = ax.pie(
         sizes,
         labels=labels,
         labeldistance=0.6,
@@ -591,6 +615,9 @@ def save_class_ratio_chart(
         textprops={"ha": "center", "va": "center"},
         startangle=90,
     )
+    for text in texts:
+        x, y = text.get_position()
+        text.set_position((x, y + 0.1))
     ax.set_title("Class Distribution")
     ax.axis("equal")
     fig.savefig(output_path, dpi=150)
