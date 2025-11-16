@@ -1,5 +1,40 @@
 # SC
-Sitting Classification.
+Ultrafast sitting classification.
+
+|Variant|Size|F1|CPU<br>inference<br>latency|ONNX|
+|:-:|:-:|:-:|:-:|:-:|
+|P| KB|0.9524|0.43 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_s_32x24.onnx)|
+|N| KB|0.9524|0.43 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_s_32x24.onnx)|
+|T| KB|0.9524|0.43 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_s_32x24.onnx)|
+|S|494 KB|0.9524|0.43 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_s_32x24.onnx)|
+|C|875 KB|0.9626|0.50 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_c_32x24.onnx)|
+
+## Setup
+
+```bash
+git clone https://github.com/PINTO0309/SC.git && cd PGC
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv sync
+source .venv/bin/activate
+```
+
+## Inference
+
+```bash
+uv run python demo_sc.py \
+-pm sc_c_32x24.onnx \
+-v 0 \
+-ep cuda \
+-dlr -dnm -dgm -dhm -dhd
+
+uv run python demo_sc.py \
+-pm pgc_c_32x24.onnx \
+-v 0 \
+-ep tensorrt \
+-dlr -dnm -dgm -dhm -dhd
+```
+
+## Dataset Preparation
 
 - AVA Actions Download (v2.2) - CC BY 4.0 license
   https://research.google.com/ava/download.html
@@ -158,10 +193,44 @@ uv run python -m sc train \
 
 ```bash
 uv run python -m sc exportonnx \
---checkpoint runs/sc_is_s/sc_best_epoch0049_f1_0.9939.pt \
+--checkpoint runs/sc_is_s_32x24/sc_best_epoch0049_f1_0.9939.pt \
 --output sc_s.onnx \
 --opset 17
 ```
 
 - The saved graph exposes `images` as input and `prob_pointing` as output (batch dimension is dynamic); probabilities can be consumed directly.
 - After exporting, the tool runs `onnxsim` for simplification and rewrites any remaining BatchNormalization nodes into affine `Mul`/`Add` primitives. If simplification fails, a warning is emitted and the unsimplified model is preserved.
+
+## Arch
+
+## Citation
+
+If you find this project useful, please consider citing:
+
+```bibtex
+@software{hyodo2025sc,
+  author    = {Katsuya Hyodo},
+  title     = {PINTO0309/SC},
+  month     = {11},
+  year      = {2025},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.17564899},
+  url       = {https://github.com/PINTO0309/sc},
+  abstract  = {Ultrafast sitting classification.},
+}
+```
+
+## Acknowledgements
+- AVA Actions Download (v2.2) - CC BY 4.0 License
+- https://github.com/PINTO0309/PINTO_model_zoo/tree/main/472_DEIMv2-Wholebody34: Apache 2.0 License
+  ```bibtex
+  @software{DEIMv2-Wholebody34,
+    author={Katsuya Hyodo},
+    title={Lightweight human detection models generated on high-quality human data sets. It can detect objects with high accuracy and speed in a total of 28 classes: body, adult, child, male, female, body_with_wheelchair, body_with_crutches, head, front, right-front, right-side, right-back, back, left-back, left-side, left-front, face, eye, nose, mouth, ear, collarbone, shoulder, solar_plexus, elbow, wrist, hand, hand_left, hand_right, abdomen, hip_joint, knee, ankle, foot.},
+    url={https://github.com/PINTO0309/PINTO_model_zoo/tree/main/472_DEIMv2-Wholebody34},
+    year={2025},
+    month={10},
+    doi={10.5281/zenodo.10229410}
+  }
+  ```
+- https://github.com/PINTO0309/bbalg: MIT License
