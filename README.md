@@ -82,7 +82,7 @@ Baseline depthwise-separable CNN:
 ```bash
 uv run python -m pgc train \
 --data_root data/dataset.parquet \
---output_dir runs/pgc \
+--output_dir runs/sc \
 --epochs 100 \
 --batch_size 256 \
 --train_ratio 0.9 \
@@ -102,7 +102,7 @@ Inverted residual + SE variant (recommended for higher capacity):
 ```bash
 uv run python -m pgc train \
 --data_root data/dataset.parquet \
---output_dir runs/pgc_is_s \
+--output_dir runs/sc_is_s \
 --epochs 100 \
 --batch_size 256 \
 --train_ratio 0.9 \
@@ -123,7 +123,7 @@ ConvNeXt-style backbone with transformer head over pooled tokens:
 ```bash
 uv run python -m pgc train \
 --data_root data/dataset.parquet \
---output_dir runs/pgc_convnext \
+--output_dir runs/sc_convnext \
 --epochs 100 \
 --batch_size 256 \
 --train_ratio 0.9 \
