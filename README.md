@@ -151,3 +151,15 @@ uv run python -m sc train \
   ```bash
   tensorboard --logdir runs/pgc
   ```
+
+### ONNX Export
+
+```bash
+uv run python -m sc exportonnx \
+--checkpoint runs/sc_is_s/sc_best_epoch0049_f1_0.9939.pt \
+--output sc_s.onnx \
+--opset 17
+```
+
+- The saved graph exposes `images` as input and `prob_pointing` as output (batch dimension is dynamic); probabilities can be consumed directly.
+- After exporting, the tool runs `onnxsim` for simplification and rewrites any remaining BatchNormalization nodes into affine `Mul`/`Add` primitives. If simplification fails, a warning is emitted and the unsimplified model is preserved.
