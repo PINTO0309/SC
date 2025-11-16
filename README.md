@@ -1,4 +1,6 @@
 # SC
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17564899.svg)](https://doi.org/10.5281/zenodo.17564899) ![GitHub License](https://img.shields.io/github/license/pinto0309/sc) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/PINTO0309/sc)
+
 Ultrafast sitting classification.
 
 https://github.com/user-attachments/assets/635773d8-3826-45fd-ac33-e51fe3695176
