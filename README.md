@@ -38,7 +38,9 @@ python 04_data_prep.py \
 --resume-existing \
 --start-index 198727
 ```
-<img width="400" alt="class_ratio" src="https://github.com/user-attachments/assets/803c0341-bdd7-43fa-9569-c195a82f6434" /><img width="400" alt="image_size_hist" src="https://github.com/user-attachments/assets/04459a93-a08f-42f5-ab4e-196853145af0" />
+
+<img width="400" alt="class_ratio_merged" src="https://github.com/user-attachments/assets/75d6bb92-7349-4853-bbaa-647aee029412" />
+<img width="400" alt="image_size_hist_merged" src="https://github.com/user-attachments/assets/d2b9b672-f365-4599-9e1d-b8e4f4700607" />
 
 ```bash
 uv run python 05_make_parquet.py \
