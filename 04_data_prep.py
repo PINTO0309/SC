@@ -351,6 +351,75 @@ def rebalance_records(
     return balanced, dropped
 
 
+def parse_crop_filename(filename: str) -> tuple[str, str, int, int] | None:
+    """Return (video_id, timestamp, person_id, class_id) parsed from a crop name."""
+    stem = Path(filename).stem
+    parts = stem.split("_")
+    if len(parts) < 4:
+        return None
+    video_id = "_".join(parts[:-3])
+    timestamp = parts[-3]
+    try:
+        person_id = int(parts[-2])
+        class_id = int(parts[-1])
+    except ValueError:
+        return None
+    if not video_id or not timestamp:
+        return None
+    return video_id, timestamp, person_id, class_id
+
+
+def load_existing_crops(
+    image_dir: Path,
+    *,
+    min_dimension: int,
+    max_dimension: int,
+) -> dict[str, CropRecord]:
+    """Scan --image-dir for existing PNGs and build CropRecord instances."""
+    existing: dict[str, CropRecord] = {}
+    if not image_dir.exists():
+        return existing
+
+    for path in sorted(image_dir.rglob("*.png")):
+        parsed = parse_crop_filename(path.name)
+        if parsed is None:
+            print(f"[resume] Skipping unrecognized crop name: {path}", file=sys.stderr)
+            continue
+        video_id, timestamp, person_id, class_id = parsed
+        try:
+            with Image.open(path) as img:
+                width, height = img.size
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"[resume] Unable to inspect {path}: {exc}", file=sys.stderr)
+            path.unlink(missing_ok=True)
+            continue
+
+        if (
+            width < min_dimension
+            or height < min_dimension
+            or width > max_dimension
+            or height > max_dimension
+        ):
+            print(f"[resume] Ignoring {path} due to invalid size ({width}x{height})", file=sys.stderr)
+            path.unlink(missing_ok=True)
+            continue
+
+        existing[path.name] = CropRecord(
+            filename=path.name,
+            video_id=video_id,
+            timestamp=timestamp,
+            person_id=person_id,
+            class_id=class_id,
+            width=width,
+            height=height,
+            path=path,
+        )
+
+    if existing:
+        print(f"[resume] Found {len(existing)} existing crops under {image_dir}")
+    return existing
+
+
 def extract_cropped_frame(
     ffmpeg_bin: str,
     video_path: Path,
@@ -568,6 +637,12 @@ def parse_args() -> argparse.Namespace:
         help="Number of images to store in each sequential subfolder (default: 1000).",
     )
     parser.add_argument(
+        "--image-folder-start",
+        type=int,
+        default=1,
+        help="Starting numeric index for newly created image subfolders (default: 1 -> 0001).",
+    )
+    parser.add_argument(
         "--annotation-file",
         type=Path,
         default=DEFAULT_ANNOTATION_FILE,
@@ -607,6 +682,16 @@ def parse_args() -> argparse.Namespace:
         help="Overwrite existing PNG files if they already exist.",
     )
     parser.add_argument(
+        "--resume-existing",
+        action="store_true",
+        help="Reuse PNGs already found under --image-dir to continue an interrupted run.",
+    )
+    parser.add_argument(
+        "--interruption",
+        action="store_true",
+        help="Only reuse existing PNGs to write outputs and exit without processing new crops.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show planned operations without writing images or CSVs.",
@@ -642,6 +727,18 @@ def parse_args() -> argparse.Namespace:
         help="Keep every Nth (video_id, timestamp) group to downsample data (default: 1, keep all).",
     )
     parser.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help="Skip this many sorted (video_id, timestamp, person_id) entries before processing (default: 0).",
+    )
+    parser.add_argument(
+        "--max-records",
+        type=int,
+        default=None,
+        help="Process at most this many entries after applying --start-index (default: all remaining).",
+    )
+    parser.add_argument(
         "--balance-classes",
         action="store_true",
         dest="balance_classes",
@@ -663,6 +760,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.max_dimension < args.min_dimension:
         parser.error("--max-dimension must be greater than or equal to --min-dimension")
+    if args.image_folder_start < 1:
+        parser.error("--image-folder-start must be greater than or equal to 1")
     return args
 
 
@@ -686,166 +785,309 @@ def main() -> None:
     collected_heights: list[int] = []
     class_counts: Counter[int] = Counter()
     images_per_folder = max(1, args.images_per_folder)
+    folder_start_index = args.image_folder_start
     generated_count = 0
     current_folder: Path | None = None
     resolution_cache: dict[Path, tuple[int, int]] = {}
     detector_session: ort.InferenceSession | None = None
     detector_input_name: str | None = None
     model_path = args.detector_model
-    if not model_path.exists():
-        print(f"[error] Detector model not found: {model_path}", file=sys.stderr)
-        sys.exit(1)
-    try:
-        detector_session, detector_input_name = load_detector_session(model_path)
-        print(f"[info] Loaded detector model from {model_path}")
-    except Exception as exc:
-        print(f"[error] Failed to load detector model: {exc}", file=sys.stderr)
-        sys.exit(1)
+    if args.interruption:
+        print("[resume] --interruption enabled; skipping detector initialization.")
+    else:
+        if not model_path.exists():
+            print(f"[error] Detector model not found: {model_path}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            detector_session, detector_input_name = load_detector_session(model_path)
+            print(f"[info] Loaded detector model from {model_path}")
+        except Exception as exc:
+            print(f"[error] Failed to load detector model: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     stride = max(1, args.timestamp_stride)
-    input_records = list(iter_annotation_records(grouped_items, timestamp_stride=stride))
-    if not input_records:
+    all_records = list(iter_annotation_records(grouped_items, timestamp_stride=stride))
+    if not all_records:
         print("[warn] No annotation records remain after timestamp stride filtering.", file=sys.stderr)
         return
 
-    progress = tqdm(
-        input_records,
-        total=len(input_records),
-        desc="Processing",
-        unit="person",
-    )
+    total_records = len(all_records)
+    start_index = max(0, args.start_index)
+    if args.start_index < 0:
+        print(f"[resume] Clipping negative --start-index {args.start_index} to 0.", file=sys.stderr)
+    if start_index >= total_records:
+        print(
+            f"[resume] --start-index ({start_index}) is greater than or equal to available records ({total_records}); nothing to do.",
+            file=sys.stderr,
+        )
+        return
+    end_index = total_records
+    if args.max_records is not None:
+        if args.max_records <= 0:
+            print(f"[resume] Ignoring non-positive --max-records value {args.max_records}.", file=sys.stderr)
+        else:
+            end_index = min(total_records, start_index + args.max_records)
+    if start_index:
+        print(f"[resume] Skipping the first {start_index} records out of {total_records}.")
+    if end_index < total_records:
+        kept = end_index - start_index
+        print(f"[resume] Limiting processing to {kept} records (ending at index {end_index - 1}).")
+    prefix_records = all_records[:start_index]
+    processing_records = all_records[start_index:end_index]
+    suffix_records = all_records[end_index:]
+    if not processing_records and not args.interruption:
+        print("[resume] No records remain after applying --start-index/--max-records filters.", file=sys.stderr)
+        return
+
+    if args.interruption and not args.resume_existing:
+        print("[resume] --interruption requires --resume-existing.", file=sys.stderr)
+        return
+    if args.interruption and args.dry_run:
+        print("[resume] --interruption cannot be combined with --dry-run.", file=sys.stderr)
+        return
+
+    progress: tqdm | None = None
+    if not args.interruption and processing_records:
+        progress = tqdm(
+            processing_records,
+            total=len(processing_records),
+            desc="Processing",
+            unit="person",
+        )
 
     detector_skipped = 0
     processed_records: list[CropRecord] = []
-
-    for video_id, timestamp, person_record in progress:
-        video_path = video_index.get(video_id)
-        if video_path is None:
-            missing_videos.add(video_id)
-            continue
-
-        filename = f"{video_id}_{timestamp}_{person_record.person_id:05d}_{person_record.class_id}.png"
-        raw_box = person_record.get_box()
-        clamped_box = clamp_box(raw_box) if raw_box else None
-        if clamped_box is None:
-            print(
-                f"[warn] Invalid bounding box for {video_id} {timestamp} pid={person_record.person_id}",
-                file=sys.stderr,
-            )
-            continue
-
-        resolution = get_video_resolution(video_path, args.ffprobe_bin, resolution_cache)
-        if resolution is None:
-            continue
-
-        width_px, height_px = estimate_pixel_dimensions(clamped_box, resolution)
-        if (
-            width_px < min_dimension
-            or height_px < min_dimension
-            or width_px > max_dimension
-            or height_px > max_dimension
-        ):
-            continue
-
-        temp_output = False
-        if args.dry_run:
-            fd, temp_name = tempfile.mkstemp(suffix=".png")
-            os.close(fd)
-            output_path = Path(temp_name)
-            try:
-                output_path.unlink()
-            except FileNotFoundError:
-                pass
-            temp_output = True
-        else:
-            if current_folder is None or generated_count % images_per_folder == 0:
-                folder_index = generated_count // images_per_folder + 1
-                folder_name = f"{folder_index:04d}"
-                current_folder = args.image_dir / folder_name
-                current_folder.mkdir(parents=True, exist_ok=True)
-            output_path = current_folder / filename
-
-        try:
-            dims = extract_cropped_frame(
-                args.ffmpeg_bin,
-                video_path,
-                timestamp,
-                output_path,
-                overwrite=args.overwrite,
-                box=clamped_box,
-                min_dimension=min_dimension,
-                max_dimension=max_dimension,
-                skip_mmco_warning=args.skip_mmco_warning,
-            )
-        except Exception as exc:
-            print(f"[warn] Failed to process {video_id} {timestamp} pid={person_record.person_id}: {exc}", file=sys.stderr)
-            if temp_output:
-                output_path.unlink(missing_ok=True)
-            continue
-        if dims is None:
-            if temp_output:
-                output_path.unlink(missing_ok=True)
-            continue
-
-        assert detector_session is not None and detector_input_name is not None
-        try:
-            detector_stats = detector_evaluate_crop(
-                detector_session,
-                detector_input_name,
-                output_path,
-            )
-        except Exception as exc:
-            print(
-                f"[warn] Detector check failed for {output_path}: {exc}",
-                file=sys.stderr,
-            )
-            output_path.unlink(missing_ok=True)
-            continue
-
-        if person_record.class_id == 1:
-            keep_crop = (
-                detector_stats.body_count == 1
-                and detector_stats.abdomen_present
-                and detector_stats.hip_present
-                and detector_stats.knee_present
-                and detector_stats.hip_knee_in_range
-            )
-        else:
-            keep_crop = (
-                detector_stats.body_count == 1
-                and detector_stats.abdomen_present
-                and detector_stats.hip_present
-                and detector_stats.knee_present
-                and detector_stats.hip_knee_delta is not None
-                and not detector_stats.hip_knee_in_range
-            )
-
-        if not keep_crop:
-            output_path.unlink(missing_ok=True)
-            detector_skipped += 1
-            continue
-
-        width_px, height_px = dims
-        processed_records.append(
-            CropRecord(
-                filename=filename,
-                video_id=video_id,
-                timestamp=timestamp,
-                person_id=person_record.person_id,
-                class_id=person_record.class_id,
-                width=width_px,
-                height=height_px,
-                path=None if args.dry_run else output_path,
-            )
+    resume_enabled = args.resume_existing and not args.dry_run
+    existing_crops: dict[str, CropRecord] = {}
+    resume_reused = 0
+    if resume_enabled:
+        existing_crops = load_existing_crops(
+            args.image_dir,
+            min_dimension=min_dimension,
+            max_dimension=max_dimension,
         )
+    elif args.resume_existing and args.dry_run:
+        print("[resume] Ignoring --resume-existing because --dry-run is enabled.", file=sys.stderr)
 
-        if temp_output:
-            output_path.unlink(missing_ok=True)
+    def reuse_records_from_range(
+        records: list[tuple[str, str, PersonRecord]],
+        *,
+        label: str,
+    ) -> tuple[int, tuple[str, str, int, int] | None]:
+        """Append cached crops belonging to the specified annotation range."""
+        reused_local = 0
+        last_entry: tuple[str, str, int, int] | None = None
+        if not resume_enabled or not records:
+            return reused_local, last_entry
+        for video_id, timestamp, person_record in records:
+            filename = f"{video_id}_{timestamp}_{person_record.person_id:05d}_{person_record.class_id}.png"
+            reused_record = existing_crops.get(filename)
+            if reused_record is None:
+                continue
+            if (
+                reused_record.video_id != video_id
+                or reused_record.timestamp != timestamp
+                or reused_record.person_id != person_record.person_id
+                or reused_record.class_id != person_record.class_id
+            ):
+                print(
+                    f"[resume] Metadata mismatch for {filename}; skipping cached crop.",
+                    file=sys.stderr,
+                )
+                continue
+            processed_records.append(reused_record)
+            existing_crops.pop(filename, None)
+            reused_local += 1
+            last_entry = (video_id, timestamp, person_record.person_id, person_record.class_id)
+        if reused_local:
+            print(f"[resume] Added {reused_local} existing crops from {label}.")
+        return reused_local, last_entry
 
-        if args.dry_run:
-            continue
+    last_completed_entry: tuple[str, str, int, int] | None = None
 
-        generated_count += 1
+    prefix_reused, prefix_last = reuse_records_from_range(prefix_records, label="skipped prefix")
+    if prefix_reused:
+        generated_count += prefix_reused
+        resume_reused += prefix_reused
+        last_completed_entry = prefix_last or last_completed_entry
+
+    if args.interruption:
+        processing_reused, processing_last = reuse_records_from_range(
+            processing_records,
+            label="interruption range",
+        )
+        if processing_reused:
+            generated_count += processing_reused
+            resume_reused += processing_reused
+            last_completed_entry = processing_last or last_completed_entry
+    elif progress is not None:
+        for video_id, timestamp, person_record in progress:
+            video_path = video_index.get(video_id)
+            if video_path is None:
+                missing_videos.add(video_id)
+                continue
+
+            filename = f"{video_id}_{timestamp}_{person_record.person_id:05d}_{person_record.class_id}.png"
+            if resume_enabled:
+                reused_record = existing_crops.get(filename)
+                if reused_record is not None:
+                    if (
+                        reused_record.video_id == video_id
+                        and reused_record.timestamp == timestamp
+                        and reused_record.person_id == person_record.person_id
+                        and reused_record.class_id == person_record.class_id
+                    ):
+                        processed_records.append(reused_record)
+                        generated_count += 1
+                        resume_reused += 1
+                        existing_crops.pop(filename, None)
+                        last_completed_entry = (
+                            video_id,
+                            timestamp,
+                            person_record.person_id,
+                            person_record.class_id,
+                        )
+                        continue
+                    print(
+                        f"[resume] Metadata mismatch for {filename}; regenerating crop.",
+                        file=sys.stderr,
+                    )
+            raw_box = person_record.get_box()
+            clamped_box = clamp_box(raw_box) if raw_box else None
+            if clamped_box is None:
+                print(
+                    f"[warn] Invalid bounding box for {video_id} {timestamp} pid={person_record.person_id}",
+                    file=sys.stderr,
+                )
+                continue
+
+            resolution = get_video_resolution(video_path, args.ffprobe_bin, resolution_cache)
+            if resolution is None:
+                continue
+
+            width_px, height_px = estimate_pixel_dimensions(clamped_box, resolution)
+            if (
+                width_px < min_dimension
+                or height_px < min_dimension
+                or width_px > max_dimension
+                or height_px > max_dimension
+            ):
+                continue
+
+            temp_output = False
+            if args.dry_run:
+                fd, temp_name = tempfile.mkstemp(suffix=".png")
+                os.close(fd)
+                output_path = Path(temp_name)
+                try:
+                    output_path.unlink()
+                except FileNotFoundError:
+                    pass
+                temp_output = True
+            else:
+                if current_folder is None or generated_count % images_per_folder == 0:
+                    folder_index = folder_start_index + generated_count // images_per_folder
+                    folder_name = f"{folder_index:04d}"
+                    current_folder = args.image_dir / folder_name
+                    current_folder.mkdir(parents=True, exist_ok=True)
+                output_path = current_folder / filename
+
+                try:
+                    dims = extract_cropped_frame(
+                        args.ffmpeg_bin,
+                        video_path,
+                        timestamp,
+                        output_path,
+                        overwrite=args.overwrite,
+                        box=clamped_box,
+                        min_dimension=min_dimension,
+                        max_dimension=max_dimension,
+                        skip_mmco_warning=args.skip_mmco_warning,
+                    )
+                except Exception as exc:
+                    print(f"[warn] Failed to process {video_id} {timestamp} pid={person_record.person_id}: {exc}", file=sys.stderr)
+                    if temp_output:
+                        output_path.unlink(missing_ok=True)
+                    continue
+                if dims is None:
+                    if temp_output:
+                        output_path.unlink(missing_ok=True)
+                    continue
+
+            assert detector_session is not None and detector_input_name is not None
+            try:
+                detector_stats = detector_evaluate_crop(
+                    detector_session,
+                    detector_input_name,
+                    output_path,
+                )
+            except Exception as exc:
+                print(
+                    f"[warn] Detector check failed for {output_path}: {exc}",
+                    file=sys.stderr,
+                )
+                output_path.unlink(missing_ok=True)
+                continue
+
+            if person_record.class_id == 1:
+                keep_crop = (
+                    detector_stats.body_count == 1
+                    and detector_stats.abdomen_present
+                    and detector_stats.hip_present
+                    and detector_stats.knee_present
+                    and detector_stats.hip_knee_in_range
+                )
+            else:
+                keep_crop = (
+                    detector_stats.body_count == 1
+                    and detector_stats.abdomen_present
+                    and detector_stats.hip_present
+                    and detector_stats.knee_present
+                    and detector_stats.hip_knee_delta is not None
+                    and not detector_stats.hip_knee_in_range
+                )
+
+            if not keep_crop:
+                output_path.unlink(missing_ok=True)
+                detector_skipped += 1
+                continue
+
+            width_px, height_px = dims
+            processed_records.append(
+                CropRecord(
+                    filename=filename,
+                    video_id=video_id,
+                    timestamp=timestamp,
+                    person_id=person_record.person_id,
+                    class_id=person_record.class_id,
+                    width=width_px,
+                    height=height_px,
+                    path=None if args.dry_run else output_path,
+                )
+            )
+
+            if temp_output:
+                output_path.unlink(missing_ok=True)
+
+            if args.dry_run:
+                last_completed_entry = (video_id, timestamp, person_record.person_id, person_record.class_id)
+                continue
+
+            generated_count += 1
+            last_completed_entry = (video_id, timestamp, person_record.person_id, person_record.class_id)
+
+    suffix_reused, suffix_last = reuse_records_from_range(suffix_records, label="skipped suffix")
+    if suffix_reused:
+        resume_reused += suffix_reused
+        last_completed_entry = suffix_last or last_completed_entry
+
+    if resume_enabled:
+        print(f"[resume] Reused {resume_reused} crops from disk.")
+        if existing_crops:
+            print(
+                f"[resume] Ignored {len(existing_crops)} PNGs that did not match the current annotations.",
+                file=sys.stderr,
+            )
 
     if missing_videos:
         sample = ", ".join(sorted(missing_videos)[:5])
@@ -882,6 +1124,21 @@ def main() -> None:
         print(f"[detector] Skipped {detector_skipped} crops after detector filtering.")
     if dropped_records:
         print(f"[balance] Removed {len(dropped_records)} crops to rebalance classes.")
+    if args.interruption:
+        if last_completed_entry:
+            video_id, timestamp, person_id, class_id = last_completed_entry
+            video_path = video_index.get(video_id)
+            if video_path is None:
+                video_label = f"{video_id} (video file not found)"
+            else:
+                video_label = str(video_path)
+            print(
+                "[resume] Interruption summary: "
+                f"video_id={video_id}, timestamp={timestamp}, person_id={person_id}, "
+                f"class_id={class_id}, video_file={video_label}"
+            )
+        else:
+            print("[resume] Interruption summary: no existing crops were found; outputs may be empty.")
 
 
 if __name__ == "__main__":
