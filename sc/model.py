@@ -6,6 +6,7 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.onnx
 
 
 @dataclass
@@ -420,15 +421,14 @@ class _TokenMixerHead(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (batch, channels, height, width)
         h, w = self.grid
-        height, width = x.shape[-2], x.shape[-1]
-        if height % h != 0 or width % w != 0:
-            raise RuntimeError(
-                f"Feature map {height}x{width} is not divisible by requested token grid {h}x{w}. "
-                "Adjust --token_mixer_grid or image/architecture settings."
-            )
-        kernel_h = height // h
-        kernel_w = width // w
-        tokens = F.avg_pool2d(x, kernel_size=(kernel_h, kernel_w), stride=(kernel_h, kernel_w))
+        if not torch.onnx.is_in_onnx_export():
+            height, width = x.shape[-2], x.shape[-1]
+            if height % h != 0 or width % w != 0:
+                raise RuntimeError(
+                    f"Feature map {height}x{width} is not divisible by requested token grid {h}x{w}. "
+                    "Adjust --token_mixer_grid or image/architecture settings."
+                )
+        tokens = F.adaptive_avg_pool2d(x, output_size=(h, w))
         tokens = tokens.flatten(2).transpose(1, 2)  # (batch, tokens, channels)
         tokens = self.mixer(tokens)
         pooled = tokens.mean(dim=1)
