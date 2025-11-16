@@ -219,3 +219,4 @@ runs/
 *.mp4
 *.tar.gz
 *.parquet
+split_list.csv

@@ -49,7 +49,7 @@ EDGES = [
     (31, 32), (31, 32),  # knee -> ankle (left and right)
 ]
 
-BODY_LONG_HISTORY_SIZE = 6
+BODY_LONG_HISTORY_SIZE = 7
 BODY_SHORT_HISTORY_SIZE = 4
 SITTING_LABEL = '!! Sitting !!'
 
@@ -1104,7 +1104,7 @@ def main():
         '-m',
         '--model',
         type=str,
-        default='deimv2_dinov3_s_wholebody34_1750query_n_batch_640x640.onnx',
+        default='deimv2_dinov3_x_wholebody34_680query_n_batch_640x640.onnx',
         help='ONNX/TFLite file path for DEIMv2.',
     )
     parser.add_argument(
@@ -1410,7 +1410,7 @@ def main():
         keypoint_th=keypoint_threshold,
         providers=providers,
     )
-    hand_classifier = SC(
+    sitting_classifier = SC(
         runtime='onnx',
         model_path=sc_model_file,
         providers=providers,
@@ -1443,10 +1443,10 @@ def main():
     white_line_width = bounding_box_line_width
     colored_line_width = white_line_width - 1
     tracker = SimpleSortTracker()
-    hand_tracker = SimpleSortTracker()
+    sitting_tracker = SimpleSortTracker()
     track_color_cache: Dict[int, np.ndarray] = {}
     body_state_histories: Dict[int, BodyStateHistory] = {}
-    def get_hand_history(track_id: int) -> BodyStateHistory:
+    def get_sitting_history(track_id: int) -> BodyStateHistory:
         history = body_state_histories.get(track_id)
         if history is None:
             history = BodyStateHistory(body_long_history_size, body_short_history_size)
@@ -1481,9 +1481,9 @@ def main():
         )
         elapsed_time = time.perf_counter() - start_time
         for box in boxes:
-            if box.classid != 26:
+            if box.classid != 0:
                 continue
-            hand_crop = crop_image_with_margin(
+            body_crop = crop_image_with_margin(
                 image=image,
                 box=box,
                 margin_top=0,
@@ -1491,25 +1491,25 @@ def main():
                 margin_left=0,
                 margin_right=0,
             )
-            if hand_crop is None or hand_crop.size == 0:
+            if body_crop is None or body_crop.size == 0:
                 continue
-            rgb_hand_crop = cv2.cvtColor(hand_crop, cv2.COLOR_BGR2RGB)
+            rgb_body_crop = cv2.cvtColor(body_crop, cv2.COLOR_BGR2RGB)
             try:
-                prob_sitting = hand_classifier(image=rgb_hand_crop)
+                prob_sitting = sitting_classifier(image=rgb_body_crop)
             except Exception:
                 continue
             box.body_prob_sitting = prob_sitting
             box.body_state = 1 if prob_sitting >= 0.50 else 0
 
-        hand_boxes = [box for box in boxes if box.classid == 26]
-        hand_tracker.update(hand_boxes)
-        matched_hand_track_ids: set[int] = set()
-        for hand_box in hand_boxes:
-            if hand_box.track_id <= 0:
+        body_boxes = [box for box in boxes if box.classid == 0]
+        sitting_tracker.update(body_boxes)
+        matched_sitting_track_ids: set[int] = set()
+        for body_box in body_boxes:
+            if body_box.track_id <= 0:
                 continue
-            matched_hand_track_ids.add(hand_box.track_id)
-            history = get_hand_history(hand_box.track_id)
-            detection_state = bool(hand_box.body_state == 1)
+            matched_sitting_track_ids.add(body_box.track_id)
+            history = get_sitting_history(body_box.track_id)
+            detection_state = bool(body_box.body_state == 1)
             history.append(detection_state)
             (
                 state_interval_judgment,
@@ -1520,17 +1520,17 @@ def main():
                 short_tracking_history=history.short_history,
             )
             history.interval_active = state_interval_judgment
-            if state_start_judgment or state_interval_judgment:
+            if state_interval_judgment:
                 history.label = SITTING_LABEL
             elif state_end_judgment:
                 history.label = ''
-            hand_box.body_label = history.label
-            hand_box.body_state = 1 if history.interval_active else 0
+            body_box.body_label = history.label
+            body_box.body_state = 1 if history.interval_active else 0
 
-        current_hand_track_ids = {track['id'] for track in hand_tracker.tracks}
-        unmatched_hand_track_ids = current_hand_track_ids - matched_hand_track_ids
-        for track_id in unmatched_hand_track_ids:
-            history = get_hand_history(track_id)
+        current_sitting_track_ids = {track['id'] for track in sitting_tracker.tracks}
+        unmatched_sitting_track_ids = current_sitting_track_ids - matched_sitting_track_ids
+        for track_id in unmatched_sitting_track_ids:
+            history = get_sitting_history(track_id)
             history.append(False)
             (
                 state_interval_judgment,
@@ -1541,12 +1541,12 @@ def main():
                 short_tracking_history=history.short_history,
             )
             history.interval_active = state_interval_judgment
-            if state_start_judgment or state_interval_judgment:
+            if state_interval_judgment:
                 history.label = SITTING_LABEL
             elif state_end_judgment:
                 history.label = ''
 
-        stale_history_ids = [track_id for track_id in list(body_state_histories.keys()) if track_id not in current_hand_track_ids]
+        stale_history_ids = [track_id for track_id in list(body_state_histories.keys()) if track_id not in current_sitting_track_ids]
         for track_id in stale_history_ids:
             body_state_histories.pop(track_id, None)
 
@@ -1593,10 +1593,10 @@ def main():
                         color = (139,116,225)
                     else:
                         # Unknown
-                        color = (0,200,255)
+                        color = (0,200,255) if box.body_state == 1 else (0,0,255)
                 else:
                     # Body
-                    color = (0,200,255)
+                    color = (0,200,255) if box.body_state == 1 else (0,0,255)
             elif classid == 5:
                 # Body-With-Wheelchair
                 color = (0,200,255)
@@ -1641,8 +1641,8 @@ def main():
                 # Wrist
                 color = (0,0,255)
             elif classid == 26:
-                # Hand (classification)
-                color = (0,255,0) if box.hand_state == 1 else (0,0,255)
+                # Hand
+                color = (0,255,0)
 
             elif classid == 29:
                 # abdomen
@@ -1793,9 +1793,11 @@ def main():
 
             headpose_txt = BOX_COLORS[box.head_pose][1] if box.head_pose != -1 else ''
             attr_txt = f'{attr_txt} {headpose_txt}' if headpose_txt != '' else f'{attr_txt}'
-            if classid == 26:
+            sitting_label_active = classid == 0 and bool(box.body_label)
+            if classid == 0:
                 attr_txt = f'{box.body_label} {box.body_prob_sitting:.3f}' if box.body_label else f'{box.body_prob_sitting:.3f}'
 
+            attr_color = (0, 0, 255) if sitting_label_active else color
             cv2.putText(
                 debug_image,
                 f'{attr_txt}',
@@ -1818,7 +1820,7 @@ def main():
                 ),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
-                color,
+                attr_color,
                 1,
                 cv2.LINE_AA,
             )
