@@ -9,7 +9,7 @@ https://github.com/user-attachments/assets/635773d8-3826-45fd-ac33-e51fe3695176
 |:-:|:-:|:-:|:-:|:-:|
 |P|115 KB|0.8923|0.13 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_p_32x24.onnx)|
 |N|176 KB|0.9076|0.24 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_n_32x24.onnx)|
-|T| KB||0.43 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_t_32x24.onnx)|
+|T|279 KB|0.8935|0.31 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_t_32x24.onnx)|
 |S|494 KB|0.9168|0.39 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_s_32x24.onnx)|
 |C|875 KB|0.9265|0.47 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_c_32x24.onnx)|
 
