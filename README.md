@@ -207,6 +207,8 @@ uv run python -m sc exportonnx \
 
 ## Arch
 
+<img width="300" alt="sc_p_32x24" src="https://github.com/user-attachments/assets/1b0d74b7-ceca-49ae-832d-9ffff80f6945" />
+
 ## Citation
 
 If you find this project useful, please consider citing:
