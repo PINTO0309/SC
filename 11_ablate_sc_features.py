@@ -91,7 +91,7 @@ def _gather_image_paths(image: str | None, image_dir: str | None, max_images: in
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Insert scalar gates after selected ONNX tensors and measure prob_pointing drops when zeroed."
+        description="Insert scalar gates after selected ONNX tensors and measure prob_sitting drops when zeroed."
     )
     parser.add_argument("--model", default="sc_c_32x24.onnx", help="Path to ONNX model.")
     parser.add_argument("--image", help="Path to a single RGB image.")
@@ -498,7 +498,7 @@ def main() -> None:
         if multi_mode:
             print(f"[IMAGE {idx:04d}] {image_path}: baseline={baseline:.4f}")
         else:
-            print(f"[BASELINE] prob_pointing={baseline:.4f} with {len(gate_specs)} gates active.")
+            print(f"[BASELINE] prob_sitting={baseline:.4f} with {len(gate_specs)} gates active.")
 
         for spec in gate_specs:
             ablate_feeds = dict(feeds)

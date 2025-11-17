@@ -540,7 +540,7 @@ def main() -> None:
     # Run the main model output for reference.
     final_output_name = base_model.graph.output[-1].name
     prob = session.run([final_output_name], feeds)[0]
-    print(f"Model prob_pointing={prob.squeeze():.4f}")
+    print(f"Model prob_sitting={prob.squeeze():.4f}")
 
     if args.composite_topk > 0 and intensity_records:
         _create_composite(
