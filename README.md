@@ -13,6 +13,12 @@ https://github.com/user-attachments/assets/635773d8-3826-45fd-ac33-e51fe3695176
 |S|494 KB|0.9168|0.39 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_s_32x24.onnx)|
 |C|875 KB|0.9265|0.47 ms|[Download](https://github.com/PINTO0309/SC/releases/download/onnx/sc_c_32x24.onnx)|
 
+## Data sample
+
+|1|2|3|4|
+|:-:|:-:|:-:|:-:|
+|<img width="24" height="32" alt="image" src="https://github.com/user-attachments/assets/1e0ba9c7-9020-43f2-a3e8-adcad1cbc283" />|<img width="24" height="32" alt="image" src="https://github.com/user-attachments/assets/c5abc97e-ae56-4e30-8be2-7f4883e41083" />|<img width="24" height="32" alt="image" src="https://github.com/user-attachments/assets/ee23ffe4-bfe9-4e43-984a-b7fa563af29c" />|<img width="24" height="32" alt="image" src="https://github.com/user-attachments/assets/fb2c5736-e22f-4933-a0e1-5b04084bede5" />|
+
 ## Setup
 
 ```bash
