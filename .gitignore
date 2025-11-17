@@ -211,6 +211,8 @@ ava_v*/
 data*/
 output*/
 runs/
+feature_heatmaps/
+ablation_heatmaps/
 *.onnx
 *.pt
 *.pth
