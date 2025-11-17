@@ -1,5 +1,5 @@
 # SC
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17625710.svg)](https://doi.org/10.5281/zenodo.17625710) ![GitHub License](https://img.shields.io/github/license/pinto0309/sc) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/PINTO0309/sc)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17625710.svg)](https://doi.org/10.5281/zenodo.17625710) ![GitHub License](https://img.shields.io/github/license/pinto0309/SC) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/PINTO0309/sc)
 
 Ultrafast sitting classification. 32x24 pixels is sufficient for estimating the state of the whole human body.
 
