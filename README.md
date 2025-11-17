@@ -1,5 +1,5 @@
 # SC
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1096373065.svg)](https://doi.org/10.5281/zenodo.1096373065) ![GitHub License](https://img.shields.io/github/license/pinto0309/sc) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/PINTO0309/sc)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17625710.svg)](https://doi.org/10.5281/zenodo.17625710) ![GitHub License](https://img.shields.io/github/license/pinto0309/sc) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/PINTO0309/sc)
 
 Ultrafast sitting classification. 32x24 pixels is sufficient for estimating the state of the whole human body.
 
@@ -220,7 +220,7 @@ If you find this project useful, please consider citing:
   month     = {11},
   year      = {2025},
   publisher = {Zenodo},
-  doi       = {10.5281/zenodo.17564899},
+  doi       = {10.5281/zenodo.17625710},
   url       = {https://github.com/PINTO0309/sc},
   abstract  = {Ultrafast sitting classification.},
 }
@@ -236,7 +236,7 @@ If you find this project useful, please consider citing:
     url={https://github.com/PINTO0309/PINTO_model_zoo/tree/main/472_DEIMv2-Wholebody34},
     year={2025},
     month={10},
-    doi={10.5281/zenodo.10229410}
+    doi={10.5281/zenodo.17625710}
   }
   ```
 - https://github.com/PINTO0309/bbalg: MIT License
