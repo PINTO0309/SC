@@ -1163,7 +1163,7 @@ def main():
     )
     parser.add_argument(
         '-ost',
-        '--object_socre_threshold',
+        '--object_score_threshold',
         type=float,
         default=0.35,
         help=\
@@ -1171,7 +1171,7 @@ def main():
     )
     parser.add_argument(
         '-ast',
-        '--attribute_socre_threshold',
+        '--attribute_score_threshold',
         type=float,
         default=0.70,
         help=\
@@ -1329,8 +1329,8 @@ def main():
     video: str = args.video
     images_dir: str = args.images_dir
     disable_waitKey: bool = args.disable_waitKey
-    object_socre_threshold: float = args.object_socre_threshold
-    attribute_socre_threshold: float = args.attribute_socre_threshold
+    object_score_threshold: float = args.object_score_threshold
+    attribute_score_threshold: float = args.attribute_score_threshold
     keypoint_threshold: float = args.keypoint_threshold
     keypoint_drawing_mode: str = args.keypoint_drawing_mode
     enable_bone_drawing_mode: bool = args.enable_bone_drawing_mode
@@ -1405,8 +1405,8 @@ def main():
     model = DEIMv2(
         runtime=runtime,
         model_path=model_file,
-        obj_class_score_th=object_socre_threshold,
-        attr_class_score_th=attribute_socre_threshold,
+        obj_class_score_th=object_score_threshold,
+        attr_class_score_th=attribute_score_threshold,
         keypoint_th=keypoint_threshold,
         providers=providers,
     )

@@ -32,13 +32,13 @@ source .venv/bin/activate
 
 ```bash
 uv run python demo_sc.py \
--pm sc_c_32x24.onnx \
+-sm sc_c_32x24.onnx \
 -v 0 \
 -ep cuda \
 -dlr -dnm -dgm -dhm -dhd
 
 uv run python demo_sc.py \
--pm sc_c_32x24.onnx \
+-sm sc_c_32x24.onnx \
 -v 0 \
 -ep tensorrt \
 -dlr -dnm -dgm -dhm -dhd
